@@ -1,0 +1,3 @@
+Best objective -5.800000000000e+01, best bound -5.800000000000e+01, gap 0.0000%
+Time used: 1143.362765789032 s
+Found  191744 trails

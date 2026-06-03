@@ -89,8 +89,8 @@ def test_diff_mitm_trails():
     file_imp_mask.close()
     file_pos_mask.close()
 
-    #solutions_to_readable("../../results/mitm/impossible_trails")
-    #solutions_to_readable("../../results/mitm/possible_trails")
+    
+    
 
     print("Differential proba =", np.log2(differential_prob))
     print("Number of impossible characteristics = ", ctr)

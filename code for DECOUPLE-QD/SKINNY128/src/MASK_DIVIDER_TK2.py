@@ -1,31 +1,3 @@
-"""
-MASK_DIVIDER_TK2.py  --  SKINNY TK2 模式 (2 层 tweakey)
-========================================================
-
-Key schedule (SKINNY 官方规范)
--------------------------------
-TK2 下 master tweakey 有两层 TK1, TK2，各 16 个 cell。每轮 KS:
-  1) 对两层都做 cell 级 PT 置换:  new[i] = old[PT[i]]
-  2) 对 TK2 的 **top 2 rows** (cell 0..7) 的每个 cell 做内部 LFSR2
-     —— 注意 LFSR 只作用在 top 2 rows！TK1 不做 LFSR.
-
-⚠️ 关键修正 (相对于旧版本):
-旧版本错误地以为 master TK2 的每个 cell 在 round r 处经历了 r 次 LFSR2,
-事实上一个 master cell 沿 PT 轨道行走, 只有当它处于 top 2 rows 时才被
-LFSR 作用一次. 因此在 round r 加到 state 的 round-key 上, master cell
-经历的 LFSR2 次数为:
-    a_r(rk_cell) = #{ k ∈ [0, r-1] : PT^k[rk_cell] < 8 }
-其中 rk_cell ∈ [0, 8) 是 round-key cell 的位置, PT^r[rk_cell] = master cell.
-
-由 PT 的结构, 对 SKINNY 而言, a_r(rk_cell) ≈ ⌈r/2⌉ (具体由轨道决定).
-
-矩阵列布局
-----------
-    [ state_cols (16*CELL_SIZE * 2 * (R+1))
-    | tk1_master (16 * CELL_SIZE)
-    | tk2_master (16 * CELL_SIZE) ]
-"""
-
 import os
 import re
 import numpy as np
@@ -37,37 +9,24 @@ from utils import (
 from GEN_MAT.GEN_LINEAR import Sbox, M_EQ
 
 
-# --------- 配置常量 -------------------------------------------------------
+
 CELL_SIZE       = SBOX_SIZE
 HALF_STATE_BITS = 16 * CELL_SIZE
 FULL_STATE_BITS = 2 * HALF_STATE_BITS
-TK_LAYER_BITS   = 16 * CELL_SIZE           # 单层 master tweakey 的 bit 数
-KEY_BITS        = 2 * TK_LAYER_BITS        # 两层加起来
+TK_LAYER_BITS   = 16 * CELL_SIZE           
+KEY_BITS        = 2 * TK_LAYER_BITS        
 SBOX_DOMAIN     = 1 << CELL_SIZE
 PT              = [9, 15, 8, 13, 10, 14, 12, 11, 0, 1, 2, 3, 4, 5, 6, 7]
 
 
-# ---------------- LFSR2 在 GF(2) 上的迭代矩阵 -----------------------------
+
 def _lfsr2_step_matrix(n):
-    """
-    返回 n x n 的二元矩阵 M，使得 new = M @ old (mod 2)，向量按 LSB-first 排布
-    （即 v[0] 是 LSB，v[n-1] 是 MSB）。
-
-    SKINNY 官方论文 LFSR2 (MSB-first 表达，x0 是 LSB):
-        4-bit:  (x3, x2, x1, x0) -> (x2, x1, x0, x3 ⊕ x2)
-        8-bit:  (x7,..,x0)       -> (x6,..,x0, x7 ⊕ x5)
-
-    换到 LSB-first:
-        new[0]       = old[n-1] ⊕ old[FEED]
-                       其中 FEED = n-2  (4-bit) 或 n-3 (8-bit)
-        new[1..n-1]  = old[0..n-2]
-    """
     if n == 4:
-        feed = n - 2   # x3 ⊕ x2
+        feed = n - 2   
     elif n == 8:
-        feed = n - 3   # x7 ⊕ x5
+        feed = n - 3   
     else:
-        raise NotImplementedError(f"LFSR2 for CELL_SIZE={n} 尚未实现")
+        raise NotImplementedError(f"LFSR2 for CELL_SIZE={n} non-exist")
 
     M = np.zeros((n, n), dtype=np.uint8)
     M[0][n - 1] = 1
@@ -78,7 +37,6 @@ def _lfsr2_step_matrix(n):
 
 
 def _lfsr2_power(r):
-    """返回 r 次 LFSR2 的累计映射矩阵 (n x n GF(2))."""
     n = CELL_SIZE
     M = np.eye(n, dtype=np.uint8)
     step = _lfsr2_step_matrix(n)
@@ -87,18 +45,8 @@ def _lfsr2_power(r):
     return M
 
 
-# ---------------- ⚠️ 修正: 正确的 LFSR2 应用次数 -----------------------
+
 def _lfsr2_applications(round_idx, rk_cell):
-    """
-    返回 master cell 在 round round_idx 处现身于 rk_cell (< 8) 之前
-    经历的 LFSR2 实际应用次数.
-
-    公式: a_r(i) = #{ k ∈ [0, r-1] : PT^k[i] < 8 }
-
-    解释: master 在 round k 时所处的位置是 PT^{r-k}[i] (反向轨道),
-    但用变量代换 j = r-k 即得 PT^j[i], j ∈ [0, r-1].
-    只有当该位置 < 8 时 LFSR 才作用.
-    """
     cnt = 0
     pos = rk_cell
     for _ in range(round_idx):
@@ -108,8 +56,8 @@ def _lfsr2_applications(round_idx, rk_cell):
     return cnt
 
 
-# 预计算: 对每 (round, rk_cell ∈ [0, 8)) 的累计 LFSR2 矩阵.
-# round 范围 0..NB_ROUNDS-1, rk_cell 范围 0..7.
+
+
 _LFSR2_FOR = [
     [_lfsr2_power(_lfsr2_applications(r, c)) for c in range(8)]
     for r in range(NB_ROUNDS)
@@ -117,16 +65,14 @@ _LFSR2_FOR = [
 
 
 def tk1_schedule(round_idx, cell_idx):
-    """每轮 PT 一次, 应用 round_idx 次. 两层 tweakey 都共享同一套 PT 置换."""
     tmp = cell_idx
     for _ in range(round_idx):
         tmp = PT[tmp]
     return tmp
 
 
-# ============== 工具: 把 0/1 矩阵的"行"做去重 ===============================
+
 def _dedup_rows(mat):
-    """去掉完全相同的行；保持首次出现顺序."""
     if mat.shape[0] == 0:
         return mat
     seen = set()
@@ -140,19 +86,8 @@ def _dedup_rows(mat):
     return mat[keep_idx]
 
 
-# ============== 0) 构造 bit-level 线性方程矩阵 =============================
-def Global_mat_bit(round_num):
-    """
-    TK2 矩阵布局: [state | TK1 master | TK2 master]
-    一个 round-key bit 同时收到两层 master 的贡献:
-        RK_r[rk_cell][bit_idx]
-          = TK1_master[mk_cell][bit_idx]                    (TK1: 无 LFSR)
-          ⊕ (LFSR2^a · TK2_master[mk_cell])[bit_idx]        (TK2: a = a_r(rk_cell) 次 LFSR2)
 
-    其中 mk_cell = PT^r[rk_cell], a = _lfsr2_applications(r, rk_cell).
-    M_EQ 里 32..39 这 8 个位置代表 "该 cell 方程引入了 round-key", 我们把
-    这一个 round-key bit 展开为上述 XOR 形式.
-    """
+def Global_mat_bit(round_num):
     num_rows = HALF_STATE_BITS * round_num
     num_cols = FULL_STATE_BITS * (round_num + 1) + KEY_BITS
     res = np.zeros((num_rows, num_cols), dtype=int)
@@ -169,38 +104,32 @@ def Global_mat_bit(round_num):
         for k in range(40):
             if M_EQ[equ_num_cell][k] != 1:
                 continue
-            if k < 16:                  # x_{r+1}
+            if k < 16:                  
                 res[i][(rn + 1) * FULL_STATE_BITS + k * CELL_SIZE + bit_idx] ^= 1
-            elif k < 32:                # y_r
+            elif k < 32:                
                 res[i][rn * FULL_STATE_BITS + k * CELL_SIZE + bit_idx] ^= 1
-            else:                       # round-key cell
-                rk_cell = k - 32                        # 0..7
-                mk_cell = tk1_schedule(rn, rk_cell)     # master cell index 0..15
+            else:                       
+                rk_cell = k - 32                        
+                mk_cell = tk1_schedule(rn, rk_cell)     
 
-                # ----- TK1 层: 直接拷贝 bit_idx (无 LFSR) -----
+                
                 res[i][tk1_base + mk_cell * CELL_SIZE + bit_idx] ^= 1
 
-                # ----- TK2 层: 应用 a_r(rk_cell) 次 LFSR2 -----
-                # bit_idx 位是 (LFSR2^a 的第 bit_idx 行) 与 master cell 的内积.
+                
+                
                 lfsr_mat = _LFSR2_FOR[rn][rk_cell]
-                lfsr_row = lfsr_mat[bit_idx]            # 长度 CELL_SIZE
+                lfsr_row = lfsr_mat[bit_idx]            
                 for src_bit in range(CELL_SIZE):
                     if lfsr_row[src_bit]:
                         res[i][tk2_base + mk_cell * CELL_SIZE + src_bit] ^= 1
-                # 注意: M_EQ 中每个 equ 至多一个 k>=32 (round-key 不会混入多个),
-                # 因此 break 是安全的.
+                
+                
                 break
     return res
 
 
-# ============== 1)-6) 抽取逻辑 ==============================================
+
 def extract_hidden_constraints(L_original, active_bit_dic, masked_bit_dic, ROUNDS):
-    """
-    返回: 消去 "非 keep 状态列" 之后保留下来的有信息的方程行.
-    支持两类输出 (合并在一个矩阵里):
-      A) 仅含 (active + masked) 状态比特、key 全 0 的纯状态约束
-      B) 含 (active + masked) 状态比特 + 任意 key 列的方程  (例如 [X]+[Y]+K=0)
-    """
     STATE_COLS = FULL_STATE_BITS * (ROUNDS + 1)
     TOTAL_COLS = L_original.shape[1]
     KEY_COLS   = TOTAL_COLS - STATE_COLS
@@ -219,8 +148,6 @@ def extract_hidden_constraints(L_original, active_bit_dic, masked_bit_dic, ROUND
     elim_count = len(elim_state)
     keep_count = len(keep_state)
 
-    print(f"[*] GF(2) 消元: elim_state={elim_count} | "
-          f"keep_state={keep_count} | key={KEY_COLS}")
 
     r = 0
     for c in range(elim_count):
@@ -251,7 +178,7 @@ def extract_hidden_constraints(L_original, active_bit_dic, masked_bit_dic, ROUND
     if KEY_COLS > 0:
         pure[:, STATE_COLS:] = key_seg[chosen]
 
-    # 自身去重
+    
     before = len(pure)
     pure = _dedup_rows(pure)
     after = len(pure)
@@ -261,8 +188,6 @@ def extract_hidden_constraints(L_original, active_bit_dic, masked_bit_dic, ROUND
     else:
         cnt_with_key = 0
     cnt_pure = after - cnt_with_key
-    print(f"[*] hidden 候选 {before} 行, 自身去重后 {after} 行 "
-          f"(纯状态={cnt_pure}, 含 key={cnt_with_key})")
     return pure
 
 
@@ -318,7 +243,6 @@ def _fmt_state_var(j):
 
 
 def _fmt_key_var(rel_idx):
-    """rel_idx 是从 STATE_COLS 起算的偏移;前 TK_LAYER_BITS 是 TK1, 后面是 TK2."""
     if rel_idx < TK_LAYER_BITS:
         return f"k1_{rel_idx}"
     return f"k2_{rel_idx - TK_LAYER_BITS}"
@@ -384,7 +308,7 @@ def generate_constraints(L_mat, dic_x, active_bit_dic, masked_bit_dic,
     STATE_COLS = FULL_STATE_BITS * (ROUNDS + 1)
     TOTAL_COLS = L_mat.shape[1]
 
-    # ---- 染色 (numpy 向量化) ----
+    
     state = L_mat[:, :STATE_COLS]
     masked_mask = np.zeros(STATE_COLS, dtype=bool)
     active_mask = np.zeros(STATE_COLS, dtype=bool)
@@ -401,11 +325,11 @@ def generate_constraints(L_mat, dic_x, active_bit_dic, masked_bit_dic,
     state[ones & masked_mask[None, :] & ~active_mask[None, :]] = 2
     L_mat[:, :STATE_COLS] = state
 
-    # ---- 提 hidden 约束 ----
+    
     hidden = extract_hidden_constraints(L_original, active_bit_dic,
                                         masked_bit_dic, ROUNDS)
 
-    # ---- 把 hidden 里与 L_original 某行完全相同的去掉 ----
+    
     if len(hidden) > 0:
         orig_set = set()
         for i in range(L_original.shape[0]):
@@ -425,8 +349,6 @@ def generate_constraints(L_mat, dic_x, active_bit_dic, masked_bit_dic,
         )
         n_dup = int((~keep_mask).sum())
         hidden = hidden[keep_mask]
-        print(f"[*] hidden 与 L_original 去重: 删除 {n_dup} 行, "
-              f"剩 {hidden.shape[0]} 行")
 
     if len(hidden) > 0:
         L_original = np.vstack((L_original, hidden))
@@ -438,7 +360,7 @@ def generate_constraints(L_mat, dic_x, active_bit_dic, masked_bit_dic,
         lm_h[:, :STATE_COLS] = h_state
         L_mat = np.vstack((L_mat, lm_h))
 
-    # ---- 选 target_rows ----
+    
     target_rows = []
     n_skip_unclassified = 0
     for r in range(L_mat.shape[0]):
@@ -453,9 +375,7 @@ def generate_constraints(L_mat, dic_x, active_bit_dic, masked_bit_dic,
         if has_state_info or has_key_info:
             target_rows.append(r)
 
-    print(f"[*] target_rows={len(target_rows)}; 跳过未分类={n_skip_unclassified}")
-
-    # ---- 收 unknown / active ----
+    
     unknown_vars = set()
     row_unknowns = {}
     row_active   = {}
@@ -468,7 +388,7 @@ def generate_constraints(L_mat, dic_x, active_bit_dic, masked_bit_dic,
         row_active[r]   = ac
         unknown_vars.update(un_m + un_k)
 
-    # ---- 涉及的 S-box ----
+    
     involved_sb = set()
     for v in unknown_vars:
         if v < STATE_COLS:
@@ -477,7 +397,7 @@ def generate_constraints(L_mat, dic_x, active_bit_dic, masked_bit_dic,
             cell_in_half = (within % HALF_STATE_BITS) // CELL_SIZE
             involved_sb.add((r_idx, cell_in_half))
 
-    # ---- 并查集 ----
+    
     uf = UnionFind(list(unknown_vars))
     for r, un in row_unknowns.items():
         for o in un[1:]:
@@ -495,7 +415,7 @@ def generate_constraints(L_mat, dic_x, active_bit_dic, masked_bit_dic,
         for o in sb_un[1:]:
             uf.union(sb_un[0], o)
 
-    # ---- cluster 收集 ----
+    
     cluster_dict = {}
     for v in unknown_vars:
         cluster_dict.setdefault(uf.find(v), []).append(v)
@@ -533,7 +453,7 @@ def generate_constraints(L_mat, dic_x, active_bit_dic, masked_bit_dic,
             cons_str.append(final)
             Z_lst.append(generate_Z(list(c_active_for_Z), [], active_bit_dic))
 
-    # 纯 active cluster
+    
     if pure_active_rows:
         sub = L_original[pure_active_rows, :]
         sub = _dedup_rows(sub)
@@ -548,7 +468,6 @@ def generate_constraints(L_mat, dic_x, active_bit_dic, masked_bit_dic,
             cons_str.append(final)
             Z_lst.append(generate_Z(list(active_for_Z), [], active_bit_dic))
 
-    print(f"[*] 共 emit {len(cons_str)} 个 cluster, emit 行数 {n_rows_used}")
     return cons_str, Z_lst
 
 
@@ -565,14 +484,10 @@ def generate_Z(var_S, active_vars, active_bit_dic):
 
 
 if __name__ == "__main__":
-    assert ADV_MODEL == "TK2", \
-        f"MASK_DIVIDER_TK2 在 ADV_MODEL={ADV_MODEL} 下被调用, 检查 utils 配置."
-    print("MASK_DIVIDER_TK2 已加载 (库模式), 请用 constraint_collector.py 驱动.")
 
-    # 简要 self-check
+    
     print()
     print("=" * 60)
-    print("LFSR2 应用次数自检 (NB_ROUNDS=%d, CELL_SIZE=%d):" % (NB_ROUNDS, CELL_SIZE))
     print("=" * 60)
     for c in range(8):
         cnts = [_lfsr2_applications(r, c) for r in range(NB_ROUNDS)]

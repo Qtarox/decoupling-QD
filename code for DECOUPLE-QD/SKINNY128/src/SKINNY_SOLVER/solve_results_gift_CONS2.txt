@@ -1,5 +1,0 @@
-Total possible key combinations (2^1): 2
-Combinations with 0 solutions: 2
-------------------------------
-Count of combinations
-time: 0.0003s

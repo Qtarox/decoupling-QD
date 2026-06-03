@@ -3,7 +3,6 @@ import time
 from ortools.sat.python import cp_model
 import importlib
 import argparse
-# 确认使用的是正确的 SKINNY128 S盒
 my_sbox= [0x65,0x4c,0x6a,0x42,0x4b,0x63,0x43,0x6b,0x55,0x75,0x5a,0x7a,0x53,0x73,0x5b,0x7b,
         0x35,0x8c,0x3a,0x81,0x89,0x33,0x80,0x3b,0x95,0x25,0x98,0x2a,0x90,0x23,0x99,0x2b,
         0xe5,0xcc,0xe8,0xc1,0xc9,0xe0,0xc0,0xe9,0xd5,0xf5,0xd8,0xf8,0xd0,0xf0,0xd9,0xf9,
@@ -24,44 +23,25 @@ AC_STATES = [0x01,0x03,0x07,0x0F,0x1F,0x3E,0x3D,0x3B,0x37,0x2F,0x1E,0x3C,0x39,0x
 0x1D,0x3A,0x35,0x2B,0x16,0x2C,0x18,0x30,0x21,0x02,0x05,0x0B,0x17,0x2E,0x1C,0x38,
 0x31,0x23,0x06,0x0D,0x1B,0x36,0x2D,0x1A,0x34,0x29,0x12,0x24,0x08,0x11,0x22,0x04]
 def get_skinny_constant(var_name):
-    """
-    SKINNY-128 AddConstants 在 SubCells 之后作用，所以注入到 y_r 而不是 x_r。
-    
-    y_r 是 round r 的 SubCells 输出 (8x16=128 bit)，全局 bit 索引 0..127：
-      cell 0 (bit 0..7)  ^= (rc3, rc2, rc1, rc0) → bit 0..3 分别 ^= rc0..rc3
-      cell 4 (bit 32..39) ^= (rc5, rc4)         → bit 32, 33 分别 ^= rc4, rc5
-      cell 8 (bit 64..71) ^= 0x02               → bit 65 ^= 1
-    """
     if not var_name.startswith('y_'):
         return 0
-    
     parts = var_name.split('_')
     r = int(parts[1])
     bit = int(parts[2])
-    
-    # round 索引从 0 开始：y_0 对应 round 0 的 AC，用 AC_STATES[0] = 0x01
     if r < 0 or r >= len(AC_STATES):
         return 0
-    
     rc = AC_STATES[r]
-    
-    # cell 0 (全局 bit 0..7)：注入 rc0..rc3 到 bit 0..3
     if 0 <= bit <= 3:
         return (rc >> bit) & 1
-    # cell 4 (全局 bit 32..39)：注入 rc4, rc5 到 bit 32, 33
     if bit == 32:
         return (rc >> 4) & 1
     if bit == 33:
         return (rc >> 5) & 1
-    # cell 8 (全局 bit 64..71)：bit 65 注入固定 1
     if bit == 65:
         return 1
-    
     return 0
 def get_sbox_tuples(sbox):
-    """预计算 S 盒的所有合法 16 位输入输出组合 (8-bit in, 8-bit out)"""
     valid_tuples = []
-    # SKINNY-128 S盒大小为 256
     for i in range(256): 
         out = sbox[i]
         valid_tuples.append(
@@ -77,45 +57,32 @@ class KeyDistributionCollector(cp_model.CpSolverSolutionCallback):
         self.k_vars = k_vars
         self.count_k = {}
         self.solution_count = 0
-
     def on_solution_callback(self):
         self.solution_count += 1
         key_tuple = tuple(self.Value(v) for v in self.k_vars)
         self.count_k[key_tuple] = self.count_k.get(key_tuple, 0) + 1
-
 def solve_with_ortools(input_text, fixed_vars, res_name):
     model = cp_model.CpModel()
     var_dict = {}
-
-    # ================= 修复 1：升级正则，兼容 k1_67, k2_66 =================
     raw_vars = set(re.findall(r'[a-z]_\d+_\d+|k\d*_\d+', input_text))
     for v in fixed_vars.keys():
         raw_vars.add(v)
     for v in raw_vars:
         var_dict[v] = model.NewBoolVar(v)
-        
-    # ================= 修复 2：升级密钥过滤与排序 =================
-    # 先按前缀 (k1, k2) 排序，再按后面的数字排序，保证决策树顺序绝对稳定
     k_names = sorted([v for v in raw_vars if v.startswith('k')], 
                      key=lambda x: (x.split('_')[0], int(x.split('_')[1])))
     k_vars = [var_dict[k] for k in k_names]
-
     sbox_valid_tuples = get_sbox_tuples(my_sbox)
     dummy_counter = 0
-
-    # 2. 解析约束
     for line in input_text.strip().split("\n"):
         line = line.strip()
         if not line:
             continue
-            
         sbox_match = re.match(r'S(?:_\[([\d_]+)\])?\((.*?)\)\s*=\s*\((.*?)\)', line)
-        
         if sbox_match:
             valid_x_str = sbox_match.group(1)
             in_vars = [var_dict[v.strip()] for v in sbox_match.group(2).split(',')]
             out_vars = [var_dict[v.strip()] for v in sbox_match.group(3).split(',')]
-            
             if valid_x_str:
                 allowed_x_vals = set(int(v) for v in valid_x_str.split('_'))
                 subset_tuples = []
@@ -130,7 +97,6 @@ def solve_with_ortools(input_text, fixed_vars, res_name):
                 model.AddAllowedAssignments(in_vars + out_vars, subset_tuples)
             else:
                 model.AddAllowedAssignments(in_vars + out_vars, sbox_valid_tuples)
-                
         else:
             line_clean = re.sub(r'[\[\]]', '', line)
             rhs = 0
@@ -139,55 +105,33 @@ def solve_with_ortools(input_text, fixed_vars, res_name):
                 line_clean = line_clean.replace('= 1', '').strip()
             elif '= 0' in line_clean:
                 line_clean = line_clean.replace('= 0', '').strip()
-                
-            # ================= 修复 3：等式内部变量提取升级 =================
             vars_in_eq = re.findall(r'[a-z]_\d+_\d+|k\d*_\d+', line_clean)
-            
             if vars_in_eq:
                 eq_vars = [var_dict[v] for v in vars_in_eq]
-                
                 constant_val = rhs
                 for v in vars_in_eq:
                     constant_val ^= get_skinny_constant(v)
-
                 dummy = model.NewIntVar(0, len(eq_vars) // 2 + 1, f'dummy_{dummy_counter}')
                 model.Add(sum(eq_vars) + constant_val == 2 * dummy)
                 dummy_counter += 1
-
-    # 3. 添加固定变量约束
     for var, vals in fixed_vars.items():
         if var in var_dict:
             val = list(vals)[0] 
             model.Add(var_dict[var] == val)
-
-    # 4. 求解配置
     solver = cp_model.CpSolver()
     solver.parameters.enumerate_all_solutions = True 
-    
-    # 如果没有捕捉到任何 k_vars，这里加个保护，避免 OR-Tools 崩溃
     if k_vars:
         model.AddDecisionStrategy(k_vars, cp_model.CHOOSE_FIRST, cp_model.SELECT_MIN_VALUE)
-
     collector = KeyDistributionCollector(k_vars)
-    
-    print("开始极速求解...")
     time_start = time.time()
     status = solver.Solve(model, collector)
     time_end = time.time()
-    
-    print(f"求解状态: {solver.StatusName(status)}")
-    print(f"共发现有效解: {collector.solution_count} 个")
-
     total_k_combinations = 1 << len(k_vars) 
     keys_with_solutions = len(collector.count_k)
     keys_with_zero_solutions = total_k_combinations - keys_with_solutions
-
-    # 5. 写入结果
     KEY_HASH = {}
-    
     if keys_with_zero_solutions > 0:
         KEY_HASH['0'] = keys_with_zero_solutions
-
     with open(res_name, "w") as fw:
         fw.write(f"Total possible key combinations (2^{len(k_vars)}): {total_k_combinations}\n")
         fw.write(f"Combinations with 0 solutions: {keys_with_zero_solutions}\n")
@@ -197,47 +141,35 @@ def solve_with_ortools(input_text, fixed_vars, res_name):
             fw.write(f"{k}: {count}\n")
             KEY_HASH[str(count)] = KEY_HASH.get(str(count), 0) + 1
         fw.write(f"time: {time_end - time_start:.4f}s\n")
-
     return KEY_HASH
-
 parser = argparse.ArgumentParser(description="GIFT SAT Solver")
 parser.add_argument('-m', '--module', type=str, default='CONS.cons_7R', 
-                    help='指定要导入的模块名，例如 CONS.cons_6R')
+                    help='module name, for exp: CONS.cons_6R')
 args = parser.parse_args()
-
-print(f"正在加载模块: {args.module}")
-
-# 2. 动态导入模块
+print(f"loading:{args.module}")
 try:
     cons_module = importlib.import_module(args.module)
-    # 显式获取模块中的 dic_cons 变量 (避免使用 import *)
     dic_cons = getattr(cons_module, 'dic_cons') 
 except ImportError:
-    print(f"错误: 找不到模块 {args.module}")
+    print(f"error: no {args.module}")
     exit(1)
 except AttributeError:
-    print(f"错误: 模块 {args.module} 中没有定义 dic_cons")
+    print(f"error: module {args.module} has no dic_cons")
     exit(1)
-str_n=cons_module.__name__.split('.')[-1]  # 获取模块名最后一部分作为标识
-
-# ================= 测试代码保持不变 =================
+str_n=cons_module.__name__.split('.')[-1]  
 if __name__ == "__main__":
-    # 假设 dic_cons 已经加载
     str_res=""
     dic_lst=[]
     for i in range(len(dic_cons)):
-        # 注意这里获取字典 key 的方式适配了你的 'CONS0' 字符串格式
         name = f"CONS{i}" 
-        if name not in dic_cons: continue # 容错
-        
+        if name not in dic_cons: continue 
         cons_pair = dic_cons[name]
         cons_t = cons_pair[0]
         z = cons_pair[1]
         solu_txt = f"solve_results_gift_{name}.txt"
-        
         t = time.time()
         dist = solve_with_ortools(cons_t, z, solu_txt)
-        print("分布哈希 (数量: 出现次数):", dist)
+        print("distribution:", dist)
         str_res+= f"c{i} = {dist}\n"
         print("Total time used:", time.time() - t)
     print(str_res)

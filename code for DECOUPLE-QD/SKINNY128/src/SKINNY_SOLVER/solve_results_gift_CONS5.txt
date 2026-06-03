@@ -1,6 +1,0 @@
-Total possible key combinations (2^2): 4
-Combinations with 0 solutions: 3
-------------------------------
-Count of combinations
-(0, 0): 1
-time: 0.0011s

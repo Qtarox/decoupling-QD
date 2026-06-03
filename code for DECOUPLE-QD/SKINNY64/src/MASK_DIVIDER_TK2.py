@@ -1,64 +1,25 @@
-"""
-MASK_DIVIDER_TK2.py  --  SKINNY-64 TK2 版本
-========================================================
-
-针对 SKINNY-64-TK2 (related-tweakey, 两条 tweakey schedule):
-    CELL_SIZE        = 4
-    HALF_STATE_BITS  = 64     (= 16 cell * 4 bit)
-    FULL_STATE_BITS  = 128    (输入半态 + 输出半态)
-    SBOX_DOMAIN      = 16
-    N_CELLS          = 16
-
-与 TK1 的唯一区别在于密钥位宽（每个 cell 由 TK1⊕TK2 注入），
-具体差异通过 Global_mat_bit 矩阵的列数自动体现，本文件循环不动。
-
-约束输出示例:
-    + [y_0_0] + x_1_0 + k_0 + k_128 = 0          # 多了一组 TK2 key
-    S(x_1_0,x_1_1,x_1_2,x_1_3) = (y_1_0,y_1_1,y_1_2,y_1_3)
-"""
-
 import re
 import os
 import numpy as np
-
 from GEN_MAT.GEN_LINEAR import (
     Sbox, M_EQ, key_schedule,
     Global_mat, Global_mat_bit,
     show_L_equ_GIFT, show_L_equ_GIFT_extract,
 )
-from utils import *  # NB_ROUNDS / MIN_CORR / THRESH / ADV_MODEL / SBOX_SIZE / extract_diff_trail_flat 等
-
-
-# ============================================================
-# SKINNY-64 常量
-# ============================================================
+from utils import *  
 CELL_SIZE        = 4
 HALF_STATE_BITS  = 64
 FULL_STATE_BITS  = 128
-SBOX_DOMAIN      = 1 << CELL_SIZE   # = 16
-N_CELLS          = HALF_STATE_BITS // CELL_SIZE  # = 16
-
-# TK2 模式自检 (避免误用)
-if ADV_MODEL != "TK2":
-    print(f"[warn] MASK_DIVIDER_TK2 被加载, 但 utils.ADV_MODEL = {ADV_MODEL}")
+SBOX_DOMAIN      = 1 << CELL_SIZE   
+N_CELLS          = HALF_STATE_BITS // CELL_SIZE  
 
 if len(Sbox) != SBOX_DOMAIN:
     raise RuntimeError(
-        f"[MASK_DIVIDER_TK2] SKINNY-64 期望 Sbox 长度 {SBOX_DOMAIN}, "
-        f"但 GEN_LINEAR.Sbox 长度为 {len(Sbox)}."
+        f"GEN_LINEAR.Sbox is {len(Sbox)}."
     )
-
-
 def extract_hidden_constraints(L_original, active_bit_dic, masked_bit_dic, ROUNDS):
-    """
-    GF(2) 上的高斯消元, 把所有中间 / 密钥变量消去, 提取出只涉及
-    masked 与 active 状态比特的隐藏方程.
-    TK2 下 key 列数 ≈ 2 × KEY_BITS_per_round × (ROUNDS-?), 但本函数
-    通过 np.shape(L_original)[1] 自动适应.
-    """
     STATE_COLS = FULL_STATE_BITS * (ROUNDS + 1)
     TOTAL_COLS = np.shape(L_original)[1]
-
     keep_cols, elim_cols = [], []
     for j in range(STATE_COLS):
         if str(j) in masked_bit_dic or str(j) in active_bit_dic:
@@ -66,15 +27,11 @@ def extract_hidden_constraints(L_original, active_bit_dic, masked_bit_dic, ROUND
         else:
             elim_cols.append(j)
     for j in range(STATE_COLS, TOTAL_COLS):
-        elim_cols.append(j)   # 所有 key 列 (TK1 + TK2) 都消去
-
+        elim_cols.append(j)   
     col_order = elim_cols + keep_cols
     mat = L_original[:, col_order].copy()
-
     rows, _ = mat.shape
     elim_count = len(elim_cols)
-    print(f"[*] GF(2) 高斯消元 (TK2): 试图消去 {elim_count} 个冗余变量 ...")
-
     r = 0
     for c in range(elim_count):
         if r >= rows:
@@ -89,23 +46,17 @@ def extract_hidden_constraints(L_original, active_bit_dic, masked_bit_dic, ROUND
             if i != r and mat[i, c] == 1:
                 mat[i] = (mat[i] + mat[r]) % 2
         r += 1
-
     pure_equations = []
     for i in range(rows):
         if np.all(mat[i, :elim_count] == 0) and np.any(mat[i, elim_count:] == 1):
             pure_row = np.zeros(TOTAL_COLS, dtype=int)
             pure_row[keep_cols] = mat[i, elim_count:]
             pure_equations.append(pure_row)
-
-    print(f"[+] 提取出 {len(pure_equations)} 条纯状态约束")
     return np.array(pure_equations) if pure_equations else np.zeros((0, TOTAL_COLS), dtype=int)
-
-
 def load_masks_from_file(file_path, round_num):
-    """解析每轮 Side 0 / Side 1 的 bit 掩码 -> [round_num][2][HALF_STATE_BITS=64]."""
     mask_list = [[[0 for _ in range(HALF_STATE_BITS)] for _ in range(2)] for _ in range(round_num)]
     if not os.path.exists(file_path):
-        print(f"错误: 文件 {file_path} 不存在")
+        print(f"no such file: {file_path} ")
         return None
     try:
         with open(file_path, 'r', encoding='utf-8') as f:
@@ -124,15 +75,11 @@ def load_masks_from_file(file_path, round_num):
                 for bit_pos, bit_val in enumerate(clean_bits):
                     if bit_pos < HALF_STATE_BITS:
                         mask_list[r_idx][s_idx][bit_pos] = int(bit_val)
-        print(f"成功加载 {len(round_blocks)} 轮数据.")
         return mask_list
     except Exception as e:
-        print(f"读取文件时出错: {e}")
+        print(f"error loading: {e}")
         return None
-
-
 def xddt_list(input_diff, output_diff):
-    """对 4-bit S-box 的 X-DDT: 穷举输入空间 0..15."""
     res = []
     if input_diff == 0:
         return res
@@ -140,10 +87,7 @@ def xddt_list(input_diff, output_diff):
         if (Sbox[x] ^ Sbox[x ^ input_diff]) == output_diff:
             res.append(x)
     return res
-
-
 def yddt_list(input_diff, output_diff):
-    """对 4-bit S-box 的 Y-DDT."""
     res = []
     if input_diff == 0:
         return res
@@ -151,13 +95,7 @@ def yddt_list(input_diff, output_diff):
         if (Sbox[x] ^ Sbox[x ^ input_diff]) == output_diff:
             res.append(Sbox[x])
     return res
-
-
 def creat_dic_GIFT(rd):
-    """
-    rd[r][0][i] / rd[r][1][i]: 第 r 轮第 i 个 cell 的输入/输出差分 (0..15).
-    跳过 xddt 为空的 cell, 防止 IndexError.
-    """
     x_dic, y_dic = {}, {}
     skipped = []
     print("running creat_dic_GIFT (SKINNY-64 TK2)!")
@@ -177,25 +115,16 @@ def creat_dic_GIFT(rd):
             yd = yddt_list(in_d, out_d)
             x_dic[f"x_{r}_{cell_idx}"] = xd[:]
             y_dic[f"y_{r}_{cell_idx}"] = yd[:]
-
     if skipped:
-        print(f"[warn] creat_dic_SKINNY 跳过了 {len(skipped)} 个不合法 cell:")
+        print(f"[warn] creat_dic_SKINNY skipped {len(skipped)} illegal cell:")
         for r, c, a, b, why in skipped[:20]:
             print(f"       r={r} cell={c} {a:x}->{b:x}  ({why})")
         if len(skipped) > 20:
-            print(f"       ... 共 {len(skipped)} 项")
-
+            print(f"       ... sklip {len(skipped)} cells")
     return x_dic, y_dic
-
-
 def get_active_bit(x_dic, y_dic):
-    """
-    对每个 cell 的 X-DDT / Y-DDT 取值集合, 逐 bit 检查是否所有元素该 bit 都相同;
-    若相同则该 bit "active", 固定值登记到字典中.
-    """
     res = {}
     pattern = r"(?:x|y)_(\d+)_(\d+)"
-
     for key, lst in x_dic.items():
         if not lst:
             continue
@@ -208,7 +137,6 @@ def get_active_bit(x_dic, y_dic):
             if active_flag:
                 global_idx = rn * FULL_STATE_BITS + cell_idx * CELL_SIZE + i
                 res[str(global_idx)] = initial
-
     for key, lst in y_dic.items():
         if not lst:
             continue
@@ -222,10 +150,7 @@ def get_active_bit(x_dic, y_dic):
                 global_idx = rn * FULL_STATE_BITS + HALF_STATE_BITS + cell_idx * CELL_SIZE + i
                 res[str(global_idx)] = initial
     return res
-
-
 def get_var(L_mat, rounds):
-    """收集 'masked' 列, 同一 S-box 的 masked 比特放到一个 relation 组里."""
     var_lst = []
     var_relation = []
     state_cols = FULL_STATE_BITS * (rounds + 1)
@@ -237,38 +162,29 @@ def get_var(L_mat, rounds):
                 tmp_rela.append(j)
         var_relation.append(tmp_rela)
     var_lst = sorted(set(var_lst))
-
     sb_lst = {}
     for v in var_lst:
         r = v // FULL_STATE_BITS
         within = v % FULL_STATE_BITS
         cell_in_half = (within % HALF_STATE_BITS) // CELL_SIZE
         sb_lst.setdefault((r, cell_in_half), []).append(v)
-
     for sb, members in sb_lst.items():
         if len(members) > 1:
             var_relation.append(members)
     return var_lst, var_relation
-
-
 class UnionFind:
     def __init__(self, elements):
         self.parent = {el: el for el in elements}
-
     def find(self, i):
         if self.parent[i] == i:
             return i
         self.parent[i] = self.find(self.parent[i])
         return self.parent[i]
-
     def union(self, i, j):
         ri, rj = self.find(i), self.find(j)
         if ri != rj:
             self.parent[ri] = rj
-
-
 def generate_sb_equ(r, sb_ind, active_bit_dic, dic_x):
-    """打印第 r 轮第 sb_ind 个 S-box 的 cell 方程 (SKINNY-64, CELL_SIZE=4)."""
     x_cons = ""
     key = f"x_{r}_{sb_ind}"
     if key in dic_x:
@@ -276,17 +192,14 @@ def generate_sb_equ(r, sb_ind, active_bit_dic, dic_x):
         for x_v in dic_x[key]:
             x_cons += f"{x_v}_"
         x_cons = x_cons[:-1] + "]"
-
     l_tmp = f"S{x_cons}("
     var_lst = []
-
     for i in range(CELL_SIZE):
         l_tmp += f"x_{r}_{sb_ind * CELL_SIZE + i},"
         global_idx = r * FULL_STATE_BITS + sb_ind * CELL_SIZE + i
         if str(global_idx) in active_bit_dic:
             var_lst.append(global_idx)
     l_tmp = l_tmp[:-1] + ") = ("
-
     for i in range(CELL_SIZE):
         l_tmp += f"y_{r}_{sb_ind * CELL_SIZE + i},"
         global_idx = r * FULL_STATE_BITS + HALF_STATE_BITS + sb_ind * CELL_SIZE + i
@@ -295,8 +208,6 @@ def generate_sb_equ(r, sb_ind, active_bit_dic, dic_x):
     l_tmp = l_tmp[:-1] + ")"
     print(l_tmp)
     return l_tmp, var_lst
-
-
 def get_clusters(var_lst, var_relation):
     var_lst = list(set(var_lst))
     uf = UnionFind(var_lst)
@@ -310,16 +221,11 @@ def get_clusters(var_lst, var_relation):
         root = uf.find(v)
         clusters.setdefault(root, []).append(v)
     return list(clusters.values())
-
-
 def generate_constraints(L_mat, dic_x, active_bit_dic, masked_bit_dic, ROUNDS, L_original):
     STATE_COLS = FULL_STATE_BITS * (ROUNDS + 1)
     TOTAL_COLS = np.shape(L_mat)[1]
-
     print(f"[generate_constraints/TK2] STATE_COLS={STATE_COLS}, "
           f"TOTAL_COLS={TOTAL_COLS}, KEY_COLS={TOTAL_COLS - STATE_COLS}")
-
-    # 1) 把原矩阵里 state 段的 1 重标记为 2 (masked) 或 3 (active)
     for r in range(np.shape(L_mat)[0]):
         for j in range(STATE_COLS):
             if L_mat[r][j] == 1:
@@ -328,8 +234,6 @@ def generate_constraints(L_mat, dic_x, active_bit_dic, masked_bit_dic, ROUNDS, L
                         L_mat[r][j] = 3
                     else:
                         L_mat[r][j] = 2
-
-    # 2) 高斯消元抽取隐藏约束
     hidden_eqs = extract_hidden_constraints(L_original, active_bit_dic, masked_bit_dic, ROUNDS)
     if len(hidden_eqs) > 0:
         L_original = np.vstack((L_original, hidden_eqs))
@@ -342,8 +246,6 @@ def generate_constraints(L_mat, dic_x, active_bit_dic, masked_bit_dic, ROUNDS, L
                     elif str(j) in masked_bit_dic:
                         L_mat_hidden[i][j] = 2
         L_mat = np.vstack((L_mat, L_mat_hidden))
-
-    # 3) 找出有效行
     target_rows = []
     for r in range(np.shape(L_mat)[0]):
         state_part = L_mat[r, :STATE_COLS]
@@ -353,8 +255,6 @@ def generate_constraints(L_mat, dic_x, active_bit_dic, masked_bit_dic, ROUNDS, L
             continue
         if np.any((state_part == 2) | (state_part == 3)):
             target_rows.append(r)
-
-    # 4) 收集未知数 (masked state bits + 涉及的所有 key bits, 包括 TK1+TK2)
     unknown_vars = set()
     row_to_unknowns = {}
     for r in target_rows:
@@ -367,8 +267,6 @@ def generate_constraints(L_mat, dic_x, active_bit_dic, masked_bit_dic, ROUNDS, L
                 un_vars.append(j)
         row_to_unknowns[r] = un_vars
         unknown_vars.update(un_vars)
-
-    # 5) 找出涉及的 S-box
     involved_sboxes = set()
     for v in unknown_vars:
         if v < STATE_COLS:
@@ -376,15 +274,12 @@ def generate_constraints(L_mat, dic_x, active_bit_dic, masked_bit_dic, ROUNDS, L
             within = v % FULL_STATE_BITS
             cell_in_half = (within % HALF_STATE_BITS) // CELL_SIZE
             involved_sboxes.add((r_idx, cell_in_half))
-
-    # 6) Union-Find 聚类
     uf = UnionFind(list(unknown_vars))
     for r, un_vars in row_to_unknowns.items():
         if len(un_vars) > 1:
             first = un_vars[0]
             for other in un_vars[1:]:
                 uf.union(first, other)
-
     sbox_to_unknowns = {}
     for (r_idx, cell_in_half) in involved_sboxes:
         sb_un_vars = []
@@ -400,22 +295,17 @@ def generate_constraints(L_mat, dic_x, active_bit_dic, masked_bit_dic, ROUNDS, L
             first = sb_un_vars[0]
             for other in sb_un_vars[1:]:
                 uf.union(first, other)
-
-    # 7) 按 cluster 输出
     cluster_dict = {}
     for v in unknown_vars:
         root = uf.find(v)
         cluster_dict.setdefault(root, []).append(v)
-
     cons_str = []
     Z_lst = []
-
     for cluster_id, root in enumerate(cluster_dict.keys()):
         c_un_vars = set(cluster_dict[root])
         c_rows = [r for r, un_vars in row_to_unknowns.items() if c_un_vars.intersection(un_vars)]
         c_sboxes = [sb for sb, sb_un_vars in sbox_to_unknowns.items() if c_un_vars.intersection(sb_un_vars)]
         c_active_vars_for_Z = set()
-
         l_tmp = ""
         if c_rows:
             cons = L_original[c_rows, :]
@@ -424,24 +314,18 @@ def generate_constraints(L_mat, dic_x, active_bit_dic, masked_bit_dic, ROUNDS, L
                 for j in range(STATE_COLS):
                     if L_mat[r][j] == 3:
                         c_active_vars_for_Z.add(j)
-
         SB_CONS = ""
         for sb in c_sboxes:
             sb_con, var_S = generate_sb_equ(sb[0], sb[1], active_bit_dic, dic_x)
             SB_CONS += sb_con + "\n"
             c_active_vars_for_Z.update(var_S)
-
         final_str = l_tmp + "\n" + SB_CONS
         if final_str.strip():
             cons_str.append(final_str.strip())
             Z = generate_Z(list(c_active_vars_for_Z), [], active_bit_dic)
             Z_lst.append(Z)
-
     return cons_str, Z_lst
-
-
 def generate_Z(var_S, active_vars, active_bit_dic):
-    """根据全局 bit 索引重建可读的 x_r_b / y_r_b 标签."""
     Z = {}
     for v in var_S:
         if str(v) in active_bit_dic:
@@ -460,26 +344,19 @@ def generate_Z(var_S, active_vars, active_bit_dic):
             Z[f"y_{r}_{ind - HALF_STATE_BITS}"] = {active_bit_dic[str(v)]}
     print("Variables involved in the constraints (Z):", Z)
     return Z
-
-
 if __name__ == "__main__":
-    # Standalone 测试入口
     ROUNDS = NB_ROUNDS
-
     data = np.load(
         f'./freq_msk/masks_freq_{NB_ROUNDS}RD_CORR{MIN_CORR}_T{THRESH}.npy'
     ).tolist()
     print("Loaded mask data shape:", np.array(data).shape)
     print("================================")
-
     DIFF_TRAIL_FILE = f"../data/differential_trails/SKINNY{16 * SBOX_SIZE}_{ADV_MODEL}_R{NB_ROUNDS}.txt"
     diff_trail = extract_diff_trail_flat(DIFF_TRAIL_FILE, ROUNDS)
     print("trails ", diff_trail)
-
     dic_x, dic_y = creat_dic_GIFT(diff_trail)
     active_bit_dic = get_active_bit(dic_x, dic_y)
     print("active_bit_dic:", active_bit_dic)
-
     masked_bit_dic = active_bit_dic.copy()
     for r in range(ROUNDS):
         for s in range(2):
@@ -488,34 +365,25 @@ if __name__ == "__main__":
                     global_idx = r * FULL_STATE_BITS + s * HALF_STATE_BITS + i
                     masked_bit_dic[str(global_idx)] = 1
     print("masked_bit_dic after merging masks:", masked_bit_dic)
-
     L = Global_mat_bit(ROUNDS)
     L_mat = L.copy()
-
     cons_str, Z_lst = generate_constraints(
         L_mat, dic_x, active_bit_dic, masked_bit_dic, ROUNDS, L
     )
-
     out_file = f"./constraints/CONS_TK2_{NB_ROUNDS}R_{MIN_CORR}_TH{THRESH}.txt"
     os.makedirs(os.path.dirname(out_file), exist_ok=True)
     open(out_file, 'w', encoding='utf-8').close()
 
-    print("\n#========= 最终分离的独立 Cluster (TK2) =========")
     cons_lst = "dic_cons={\n \n"
     for i in range(len(cons_str)):
         res_str = f'CONS{i}="""\n' + str(cons_str[i]) + '"""'
         res_str += f"\nZ{i}=" + str(Z_lst[i]) + "\n\n"
-
-        print(f"\n#[ Cluster {i} ]")
         print(f'CONS{i}="""\n', cons_str[i])
         print('"""')
         print(f"Z{i}=", Z_lst[i])
-        print("#----------------------------------------")
-
         cons_lst += f"'CONS{i}': (CONS{i},Z{i}),\n"
         with open(out_file, 'a', encoding='utf-8') as fh:
             fh.write(res_str)
-
     cons_lst += "}"
     with open(out_file, 'a', encoding='utf-8') as fh:
         fh.write(cons_lst)

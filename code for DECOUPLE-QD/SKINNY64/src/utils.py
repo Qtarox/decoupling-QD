@@ -2,13 +2,13 @@ import multiprocessing
 import os
 import re
 
-# Constants to be set
+
 THRESH=0.5
-NB_ROUNDS = 15          # Number of rounds on which the characteristic will be analysed
-FILE_NB_ROUNDS = NB_ROUNDS      # Number of rounds of the whole characteristic
-ADV_MODEL = "TK3"        # Related-key adversary model, possible values are "SK", "TK1", "TK2", "TK3"
-SBOX_SIZE = 4           # 4 for SKINNY-64,  8 for SKINNY-128
-MIN_CORR = 60# Lower bound on the correlation in the model 
+NB_ROUNDS = 15          
+FILE_NB_ROUNDS = NB_ROUNDS      
+ADV_MODEL = "TK3"        
+SBOX_SIZE = 4           
+MIN_CORR = 60
 """
 For the MIN_CORR constant, it means that all found quasidifferential trails will
 have an absolute correlation higher than 2^-MIN_CORR. Thus, if this value is 
@@ -20,19 +20,15 @@ in fixed-key the formula will return negative values. Those characteristics are:
  - ../data/differential_trails/SKINNY128_SK_R13.txt
 """
 PT =[9,15,8,13,10,14,12,11,0,1,2,3,4,5,6,7]
-# This point to the location of the QDTM of SKINNY-64 if SBOX_SIZE = 4 and 
-# SKINNY-128 if SBOX_SIZE = 8. One must update PATH to the corresponding location
-# where those matrices are stored.
-# MATRIX_FILE = f"PATH/skinny{16 * SBOX_SIZE}_qdm_sbox"
 MATRIX_FILE = f"../data/quasi_differential_matrix"
 
-# Inequalities for the different characteristics analysed
+
 SBOX_INEQUALITIES_DIR = f"../data/trails_inequalities/SKINNY{16 * SBOX_SIZE}_{ADV_MODEL}_R{FILE_NB_ROUNDS}_ineq/" 
 
-# Inequalities for differential MITM
-#SBOX_INEQUALITIES_DIR = f"../data/trails_inequalities/MITM_inequalities" 
 
-# Those constants are set automatically
+
+
+
 Z = 1
 if ADV_MODEL != "SK":
     Z = int(ADV_MODEL[2])
@@ -49,7 +45,7 @@ if SBOX_SIZE == 4:
 if SBOX_SIZE == 8:
     CORR_RANGE = [0.0, -5.0, -2.0, -1.0, -3.41504, -3.0, -4.0, -2.41504, -1.83007, -4.41504, -1.09311, -2.19265, -1.41504, -1.29956, -1.54057, -3.67807, -2.67807, -6.0, -3.19265, -7.00009, -5.41501]
 
-# Key schedule permutation
+
 KS = [[ 9, 15,  8, 13], 
       [10, 14, 12, 11],
       [ 0,  1,  2,  3],
@@ -87,7 +83,7 @@ def print_solution(solution):
     return (line0 + "\n" + line1 + "\n" + line2 + "\n" + line3)
 
 def solutions_to_readable(fileName):
-    # reading input solutions
+    
     fileIn = open(fileName, "r")
     solutions = []
     if fileIn.mode == "r":
@@ -95,12 +91,12 @@ def solutions_to_readable(fileName):
         solutions = contents.split("\n")
         fileIn.close()
 
-    # constructing the readable solutions
+    
     readable = ""
     for solution in solutions:
         readable += print_solution(solution) + "\n------------------------\n"
 
-    # writing the readable solution in
+    
     fileOut = open(fileName+ "_readable.txt", "w+")
     fileOut.write(readable)
     fileOut.close()
@@ -132,7 +128,7 @@ def extract_diff_trail_flat(trail_file, nb_rounds):
         
         for j in range(4):
             cell_idx = i * 4 + j
-            # 直接赋值整数，不再转换为 bit list
+            
             diff_trail[round_idx][0][cell_idx] = diff[j]
             diff_trail[round_idx][1][cell_idx] = diff[4 + j]
             

@@ -1,0 +1,9 @@
+Total possible key combinations (2^3): 8
+Combinations with 0 solutions: 4
+------------------------------
+Count of combinations
+(0, 1, 0): 2
+(1, 0, 0): 2
+(0, 0, 1): 2
+(1, 1, 1): 2
+time: 0.0040s

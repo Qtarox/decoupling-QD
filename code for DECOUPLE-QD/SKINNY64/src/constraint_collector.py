@@ -1,0 +1,110 @@
+import os
+import importlib
+import numpy as np
+
+from utils import (
+    NB_ROUNDS, SBOX_SIZE, MIN_CORR, THRESH, ADV_MODEL,
+    extract_diff_trail_flat,
+)
+from SKINNYMILP_msk import SKINNY_MILP_Quasi_Diff
+
+
+# --------- 按 ADV_MODEL 选 MASK_DIVIDER 模块 -------------------------------
+_MASK_DIVIDER_BY_MODE = {
+    "SK":  "MASK_DIVIDER_TK1",
+    "TK1": "MASK_DIVIDER_TK1",
+    "TK2": "MASK_DIVIDER_TK2",
+    "TK3": "MASK_DIVIDER_TK1",
+}
+
+
+def _load_mask_divider():
+    if ADV_MODEL not in _MASK_DIVIDER_BY_MODE:
+        raise ValueError(
+            f"不支持的 ADV_MODEL={ADV_MODEL}。"
+            f"已实现的模式: {sorted(_MASK_DIVIDER_BY_MODE)}"
+        )
+    name = _MASK_DIVIDER_BY_MODE[ADV_MODEL]
+    print(f"[loader] ADV_MODEL={ADV_MODEL}  ->  import {name}")
+    return importlib.import_module(name)
+
+
+# --------- 主流程 ----------------------------------------------------------
+def run_milp_if_needed():
+    mask_path = f'./freq_msk/masks_freq_{NB_ROUNDS}RD_CORR{MIN_CORR}_T{THRESH}.npy'
+    if os.path.exists(mask_path):
+        print(f"[skip MILP] mask 已存在: {mask_path}")
+    else:
+        print(f"[run MILP] mask 不存在，启动 Gurobi 搜索 ...")
+        SKINNY_MILP_Quasi_Diff(NB_ROUNDS)
+    return mask_path
+
+
+def main():
+    ROUNDS = NB_ROUNDS
+
+    # ---- 0) 选 MASK_DIVIDER -------------------------------------------
+    MD = _load_mask_divider()
+
+    # ---- 1) MILP（必要时） --------------------------------------------
+    mask_path = run_milp_if_needed()
+
+    # ---- 2) 加载 freq mask ---------------------------------------------
+    data = np.load(mask_path)
+    expected = (ROUNDS, 2, MD.HALF_STATE_BITS)
+    assert data.shape == expected, (
+        f"freq mask 形状 {data.shape} 与 SKINNY-{16*SBOX_SIZE} / {ROUNDS} 轮 "
+        f"预期 {expected} 不一致。检查 utils.SBOX_SIZE / NB_ROUNDS。"
+    )
+    data = data.tolist()
+    print(f"[load] {mask_path}  shape={expected}")
+
+    # ---- 3) 差分轨迹 + active_bit_dic ----------------------------------
+    diff_file = (
+        f"../data/differential_trails/SKINNY{16 * SBOX_SIZE}_{ADV_MODEL}_R{ROUNDS}.txt"
+    )
+    diff_trail = extract_diff_trail_flat(diff_file, ROUNDS)
+    dic_x, dic_y = MD.creat_dic_GIFT(diff_trail)
+    active_bit_dic = MD.get_active_bit(dic_x, dic_y)
+    print(f"[derive] #active bits = {len(active_bit_dic)}")
+
+    # ---- 4) 合并 freq mask 到 masked_bit_dic ---------------------------
+    masked_bit_dic = active_bit_dic.copy()
+    for r in range(ROUNDS):
+        for s in range(2):
+            for i in range(MD.HALF_STATE_BITS):
+                if data[r][s][i] == 1:
+                    g = r * MD.FULL_STATE_BITS + s * MD.HALF_STATE_BITS + i
+                    masked_bit_dic[str(g)] = 1
+    print(f"[merge] #masked bits (含 active) = {len(masked_bit_dic)}")
+
+    # ---- 5) 构造线性矩阵 + 抽 cluster ----------------------------------
+    L = MD.Global_mat_bit(ROUNDS)
+    L_mat = L.copy()
+    cons_str, Z_lst = MD.generate_constraints(
+        L_mat, dic_x, active_bit_dic, masked_bit_dic, ROUNDS, L
+    )
+
+    # ---- 6) 输出 -------------------------------------------------------
+    out_file = (
+        f"./constraints/CONS_{ADV_MODEL}_{ROUNDS}R_{MIN_CORR}_TH{THRESH}.txt"
+    )
+    os.makedirs(os.path.dirname(out_file), exist_ok=True)
+
+    print(f"\n#========= 最终分离的独立 Cluster ({ADV_MODEL}) =========")
+    cons_lst_str = "dic_cons={\n \n"
+    with open(out_file, 'w', encoding='utf-8') as fh:
+        for i, (cstr, Z) in enumerate(zip(cons_str, Z_lst)):
+            block = f'CONS{i}="""\n{cstr}"""\nZ{i}={Z}\n\n'
+            fh.write(block)
+            print(f"\n#[ Cluster {i} ]\n{block}")
+            cons_lst_str += f"'CONS{i}': (CONS{i},Z{i}),\n"
+        cons_lst_str += "}"
+        fh.write(cons_lst_str)
+
+    print(f"\nConstraints written: {out_file}")
+    print(f"#clusters = {len(cons_str)}")
+
+
+if __name__ == "__main__":
+    main()

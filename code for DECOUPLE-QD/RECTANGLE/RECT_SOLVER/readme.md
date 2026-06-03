@@ -1,0 +1,1 @@
+This file contains the part of LAT study, probabilistic modeling and the solving of constraints

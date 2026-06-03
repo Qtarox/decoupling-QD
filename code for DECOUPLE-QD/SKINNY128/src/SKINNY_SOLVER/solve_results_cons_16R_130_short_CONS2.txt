@@ -1,0 +1,22 @@
+prob_mode: enumerate
+Total key combinations (2^5): 32
+Zero-solution keys: 16
+------------------------------
+Raw counts:
+  (1, 1, 1, 0, 0): count=1024, weight=3.840000e+02
+  (0, 1, 0, 1, 0): count=1024, weight=3.840000e+02
+  (0, 0, 0, 1, 1): count=1024, weight=3.840000e+02
+  (1, 0, 1, 0, 1): count=1024, weight=3.840000e+02
+  (1, 0, 1, 0, 0): count=1024, weight=3.840000e+02
+  (0, 0, 0, 1, 0): count=1024, weight=3.840000e+02
+  (0, 1, 0, 1, 1): count=1024, weight=3.840000e+02
+  (1, 1, 1, 0, 1): count=1024, weight=3.840000e+02
+  (0, 0, 0, 0, 1): count=1024, weight=3.840000e+02
+  (1, 0, 1, 1, 1): count=1024, weight=3.840000e+02
+  (1, 1, 1, 1, 0): count=1024, weight=3.840000e+02
+  (0, 1, 0, 0, 0): count=1024, weight=3.840000e+02
+  (0, 0, 0, 0, 0): count=1024, weight=4.480000e+02
+  (1, 0, 1, 1, 0): count=1024, weight=4.480000e+02
+  (1, 1, 1, 1, 1): count=1024, weight=4.480000e+02
+  (0, 1, 0, 0, 1): count=1024, weight=4.480000e+02
+time: 1.6535s

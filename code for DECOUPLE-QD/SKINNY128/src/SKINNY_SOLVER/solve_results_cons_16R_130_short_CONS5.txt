@@ -1,0 +1,10 @@
+prob_mode: enumerate
+Total key combinations (2^2): 4
+Zero-solution keys: 0
+------------------------------
+Raw counts:
+  (0, 0): count=1, weight=1.250000e-01
+  (1, 1): count=1, weight=1.250000e-01
+  (1, 0): count=1, weight=8.750000e-01
+  (0, 1): count=1, weight=8.750000e-01
+time: 0.0018s
